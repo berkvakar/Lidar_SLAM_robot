@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypackagename="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>my_robot_slam</name>
+  <version>0.0.0</version>
+  <description>SLAM configuration files</description>
+  <maintainer email="stefan@todo.todo">stefan</maintainer>
+  <license>TODO</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
