@@ -1,0 +1,352 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LiDAR Viewer</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --border: #2a2f3a;
+    --text: #e6e8eb;
+    --muted: #8b93a1;
+    --grid: #262b35;
+    --grid-label: #5d6573;
+    --point: #4cc9f0;
+    --closest: #ff5d5d;
+    --robot: #f5f5f5;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --button: #232833;
+    --button-on: #2f4a5a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  body { display: flex; flex-direction: column; }
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px;
+    padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  .status { display: flex; align-items: center; gap: 8px; font-weight: 600; min-width: 130px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
+  .dot.ok { background: var(--ok); }
+  .dot.warn { background: var(--warn); }
+  .stat { display: flex; flex-direction: column; min-width: 70px; }
+  .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .stat .value { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .controls { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; }
+  button {
+    background: var(--button); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 12px; font: inherit; cursor: pointer;
+  }
+  button[aria-pressed="true"] { background: var(--button-on); border-color: var(--point); }
+  main { position: relative; flex: 1; min-height: 0; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  #notice {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    max-width: calc(100% - 32px); padding: 8px 14px; border-radius: 6px;
+    background: var(--panel); border: 1px solid var(--warn); color: var(--warn); text-align: center;
+  }
+  #notice[hidden] { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <div class="status"><span id="status-dot" class="dot"></span><span id="status-text">Connecting…</span></div>
+  <div class="stat"><span class="label">Scan rate</span><span class="value" id="stat-rate">–</span></div>
+  <div class="stat"><span class="label">Points</span><span class="value" id="stat-points">–</span></div>
+  <div class="stat"><span class="label">Closest</span><span class="value" id="stat-closest">–</span></div>
+  <div class="stat"><span class="label">View radius</span><span class="value" id="stat-radius">–</span></div>
+  <div class="controls">
+    <button id="btn-zoom-out" title="Zoom out">−</button>
+    <button id="btn-zoom-in" title="Zoom in">+</button>
+    <button id="btn-lines" aria-pressed="false" title="Connect neighbouring points">Lines</button>
+    <button id="btn-pause" aria-pressed="false" title="Freeze the current scan">Pause</button>
+  </div>
+</header>
+<main>
+  <canvas id="view"></canvas>
+  <div id="notice" hidden></div>
+</main>
+
+<script>
+'use strict';
+
+// View radius limits in metres (LD19 max range is 12 m).
+const MIN_RADIUS_M = 0.5;
+const MAX_RADIUS_M = 15;
+// No scan for this long (ms) means the topic has stopped.
+const STALE_AFTER_MS = 2000;
+// Neighbouring points further apart than this (m) are not joined in line mode.
+const LINE_BREAK_M = 0.3;
+
+const canvas = document.getElementById('view');
+const ctx = canvas.getContext('2d');
+const css = getComputedStyle(document.documentElement);
+const color = name => css.getPropertyValue(name).trim();
+
+const state = {
+  scan: null,          // last decoded scan: {points, closest, valid, total, rateHz}
+  viewRadius: 6,       // metres from robot to the edge of the shorter canvas side
+  paused: false,
+  lines: false,
+  lastScanAt: 0,       // performance.now() of the last received scan
+  connected: false,
+};
+
+/**
+ * Convert a scan message from the server into drawable points.
+ *
+ * @param {Object} msg  JSON from /stream: angle_min and angle_increment in
+ *   radians (0 = robot forward, counter-clockwise positive), ranges in metres
+ *   with null for invalid readings, scan_rate_hz in Hz.
+ * @return {Object} {points: Array<{x, y, r, a}|null>, closest: point or null,
+ *   valid: number of valid points, total: number of readings, rateHz}.
+ *   x is forward and y is left of the robot, in metres.
+ */
+function decodeScan(msg) {
+  const points = [];
+  let closest = null;
+  let valid = 0;
+  msg.ranges.forEach((r, i) => {
+    if (r === null) { points.push(null); return; }
+    const a = msg.angle_min + i * msg.angle_increment;
+    const p = { x: r * Math.cos(a), y: r * Math.sin(a), r, a };
+    points.push(p);
+    valid++;
+    if (!closest || r < closest.r) closest = p;
+  });
+  return { points, closest, valid, total: msg.ranges.length, rateHz: msg.scan_rate_hz };
+}
+
+/**
+ * Pick a range-ring spacing that gives roughly 3-6 rings in view.
+ *
+ * @param {number} radius  view radius in metres.
+ * @return {number} ring spacing in metres (0.25, 0.5, 1, 2 or 5).
+ */
+function ringStep(radius) {
+  return [0.25, 0.5, 1, 2, 5].find(step => radius / step <= 6) || 5;
+}
+
+/**
+ * Redraw the whole canvas: range rings, robot marker and scan points.
+ * The robot sits in the centre with its forward direction pointing up.
+ */
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.width / dpr;
+  const h = canvas.height / dpr;
+  const cx = w / 2;
+  const cy = h / 2;
+  const scale = (Math.min(w, h) / 2) * 0.92 / state.viewRadius;  // pixels per metre
+  // Robot frame (x forward, y left) to screen (up = forward).
+  const toScreen = p => [cx - p.y * scale, cy - p.x * scale];
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = color('--bg');
+  ctx.fillRect(0, 0, w, h);
+
+  // Range rings with labels, plus forward/sideways axes.
+  const step = ringStep(state.viewRadius);
+  const outer = Math.hypot(w, h) / 2 / scale;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = color('--grid');
+  ctx.fillStyle = color('--grid-label');
+  ctx.font = '11px system-ui, sans-serif';
+  for (let r = step; r <= outer; r += step) {
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * scale, 0, 2 * Math.PI);
+    ctx.stroke();
+    ctx.fillText(`${+r.toFixed(2)} m`, cx + 4, cy - r * scale - 4);
+  }
+  ctx.beginPath();
+  ctx.moveTo(cx, 0); ctx.lineTo(cx, h);
+  ctx.moveTo(0, cy); ctx.lineTo(w, cy);
+  ctx.stroke();
+
+  // Robot: triangle pointing forward (up).
+  ctx.fillStyle = color('--robot');
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - 10);
+  ctx.lineTo(cx - 7, cy + 7);
+  ctx.lineTo(cx + 7, cy + 7);
+  ctx.closePath();
+  ctx.fill();
+
+  const scan = state.scan;
+  if (!scan) return;
+
+  ctx.fillStyle = color('--point');
+  ctx.strokeStyle = color('--point');
+  if (state.lines) {
+    // Join neighbours, but break at gaps and depth jumps so separate
+    // objects are not connected.
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    let prev = null;
+    for (const p of scan.points) {
+      if (!p) { prev = null; continue; }
+      const [sx, sy] = toScreen(p);
+      if (prev && Math.hypot(p.x - prev.x, p.y - prev.y) <= LINE_BREAK_M) ctx.lineTo(sx, sy);
+      else ctx.moveTo(sx, sy);
+      prev = p;
+    }
+    ctx.stroke();
+  } else {
+    for (const p of scan.points) {
+      if (!p) continue;
+      const [sx, sy] = toScreen(p);
+      ctx.fillRect(sx - 1.5, sy - 1.5, 3, 3);
+    }
+  }
+
+  if (scan.closest) {
+    const [sx, sy] = toScreen(scan.closest);
+    ctx.strokeStyle = color('--closest');
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(sx, sy, 7, 0, 2 * Math.PI);
+    ctx.stroke();
+  }
+}
+
+/**
+ * Update the header: connection status, notice banner and scan statistics.
+ */
+function updateHeader() {
+  const dot = document.getElementById('status-dot');
+  const text = document.getElementById('status-text');
+  const notice = document.getElementById('notice');
+  const stale = performance.now() - state.lastScanAt > STALE_AFTER_MS;
+
+  if (!state.connected) {
+    dot.className = 'dot';
+    text.textContent = 'Disconnected';
+    notice.textContent = 'Lost connection to the robot. Retrying…';
+    notice.hidden = false;
+  } else if (state.paused) {
+    dot.className = 'dot warn';
+    text.textContent = 'Paused';
+    notice.hidden = true;
+  } else if (stale) {
+    dot.className = 'dot warn';
+    text.textContent = 'No scans';
+    notice.textContent = 'Connected, but no scans are arriving. Is the LiDAR driver running and publishing /scan?';
+    notice.hidden = false;
+  } else {
+    dot.className = 'dot ok';
+    text.textContent = 'Live';
+    notice.hidden = true;
+  }
+
+  document.getElementById('stat-radius').textContent = `${+state.viewRadius.toFixed(2)} m`;
+  const scan = state.scan;
+  if (!scan) return;
+  document.getElementById('stat-rate').textContent = `${scan.rateHz.toFixed(1)} Hz`;
+  document.getElementById('stat-points').textContent = `${scan.valid} / ${scan.total}`;
+  if (scan.closest) {
+    // Bearing in degrees: 0 = straight ahead, positive = to the left.
+    const deg = Math.round(scan.closest.a * 180 / Math.PI);
+    const bearing = ((deg + 540) % 360) - 180;
+    const side = bearing === 0 ? '' : bearing > 0 ? ' L' : ' R';
+    document.getElementById('stat-closest').textContent =
+      `${scan.closest.r.toFixed(2)} m @ ${Math.abs(bearing)}°${side}`;
+  } else {
+    document.getElementById('stat-closest').textContent = '–';
+  }
+}
+
+/**
+ * Match the canvas pixel buffer to its on-screen size (sharp on HiDPI screens).
+ */
+function resizeCanvas() {
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = Math.round(rect.width * dpr);
+  canvas.height = Math.round(rect.height * dpr);
+  draw();
+}
+
+/**
+ * Change the view radius and redraw.
+ *
+ * @param {number} factor  multiplier for the radius; > 1 zooms out, < 1 zooms in.
+ */
+function zoom(factor) {
+  state.viewRadius = Math.min(MAX_RADIUS_M, Math.max(MIN_RADIUS_M, state.viewRadius * factor));
+  updateHeader();
+  draw();
+}
+
+/**
+ * Open the SSE stream. The browser reconnects automatically if it drops.
+ */
+function connect() {
+  const source = new EventSource('stream');
+  source.onopen = () => { state.connected = true; updateHeader(); };
+  source.onerror = () => { state.connected = false; updateHeader(); };
+  source.onmessage = event => {
+    state.connected = true;
+    if (state.paused) return;
+    state.scan = decodeScan(JSON.parse(event.data));
+    state.lastScanAt = performance.now();
+    updateHeader();
+    draw();
+  };
+}
+
+/**
+ * Wire up buttons, mouse-wheel zoom and two-finger pinch zoom.
+ */
+function setupControls() {
+  document.getElementById('btn-zoom-in').onclick = () => zoom(1 / 1.25);
+  document.getElementById('btn-zoom-out').onclick = () => zoom(1.25);
+
+  const toggle = (id, key) => {
+    const button = document.getElementById(id);
+    button.onclick = () => {
+      state[key] = !state[key];
+      button.setAttribute('aria-pressed', String(state[key]));
+      updateHeader();
+      draw();
+    };
+  };
+  toggle('btn-lines', 'lines');
+  toggle('btn-pause', 'paused');
+
+  canvas.addEventListener('wheel', event => {
+    event.preventDefault();
+    zoom(Math.exp(event.deltaY * 0.001));
+  }, { passive: false });
+
+  let pinchDistance = null;
+  const touchDistance = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  canvas.addEventListener('touchstart', event => {
+    if (event.touches.length === 2) pinchDistance = touchDistance(event.touches);
+  });
+  canvas.addEventListener('touchmove', event => {
+    if (event.touches.length !== 2 || !pinchDistance) return;
+    event.preventDefault();
+    const distance = touchDistance(event.touches);
+    zoom(pinchDistance / distance);
+    pinchDistance = distance;
+  }, { passive: false });
+  canvas.addEventListener('touchend', () => { pinchDistance = null; });
+}
+
+window.addEventListener('resize', resizeCanvas);
+setupControls();
+resizeCanvas();
+updateHeader();
+connect();
+setInterval(updateHeader, 500);  // notices staleness even when no events arrive
+</script>
+</body>
+</html>
