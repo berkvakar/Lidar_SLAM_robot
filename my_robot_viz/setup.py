@@ -25,6 +25,7 @@ setup(
     entry_points={
         'console_scripts': [
             'scan_web_server = my_robot_viz.scan_web_server:main',
+            'odom_test_server = my_robot_viz.odom_test_server:main',
         ],
     },
 )

@@ -1,0 +1,699 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Odometry Test</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #181b22;
+    --border: #2a2f3a;
+    --text: #e6e8eb;
+    --muted: #8b93a1;
+    --grid: #262b35;
+    --grid-label: #5d6573;
+    --axis-x: #7a3b3b;
+    --axis-y: #3b6b45;
+    --path: #4cc9f0;
+    --command: #fbbf24;
+    --robot: #f5f5f5;
+    --start: #fbbf24;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --button: #232833;
+    --button-on: #2f4a5a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  body { display: flex; flex-direction: column; }
+  header {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px;
+    padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--border);
+  }
+  .status { display: flex; align-items: center; gap: 8px; font-weight: 600; min-width: 150px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--bad); }
+  .dot.ok { background: var(--ok); }
+  .dot.warn { background: var(--warn); }
+  .stat { display: flex; flex-direction: column; min-width: 64px; }
+  .stat .label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .stat .value { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .controls { margin-left: auto; display: flex; flex-wrap: wrap; gap: 6px; }
+  button, select, input {
+    background: var(--button); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; font: inherit;
+  }
+  button { cursor: pointer; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button[aria-pressed="true"] { background: var(--button-on); border-color: var(--path); }
+  button.primary { background: var(--button-on); border-color: var(--path); font-weight: 600; }
+  button.danger { background: #5a1f1f; border-color: var(--bad); color: #fff; font-weight: 700; }
+  .layout { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) 360px; }
+  .map { position: relative; min-height: 0; }
+  #view { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  #notice {
+    position: absolute; top: 16px; left: 50%; transform: translateX(-50%);
+    max-width: calc(100% - 32px); padding: 8px 14px; border-radius: 6px;
+    background: var(--panel); border: 1px solid var(--warn); color: var(--warn); text-align: center;
+  }
+  #notice[hidden] { display: none; }
+  aside {
+    overflow-y: auto; background: var(--panel); border-left: 1px solid var(--border);
+    padding: 12px 16px; display: flex; flex-direction: column; gap: 16px;
+  }
+  h2 { margin: 0 0 8px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+  .form { display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; }
+  .form label { color: var(--muted); }
+  .form input, .form select { width: 100%; min-width: 0; }
+  .form [hidden] { display: none; }
+  .buttons { display: flex; gap: 8px; margin-top: 10px; }
+  .buttons button { flex: 1; padding: 10px; }
+  .hint { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+  #move-status { color: var(--text); min-height: 1.4em; }
+  #move-status.error { color: var(--bad); }
+  .progress { height: 6px; background: var(--grid); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+  .progress > div { height: 100%; width: 0; background: var(--path); }
+  #chart { width: 100%; height: 180px; display: block; }
+  .legend { display: flex; gap: 14px; font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .legend span::before { content: ""; display: inline-block; width: 14px; height: 0; margin-right: 5px; vertical-align: middle; border-top: 2px solid var(--path); }
+  .legend .cmd::before { border-top: 2px dashed var(--command); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 4px 4px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; }
+  td input { width: 64px; padding: 2px 4px; }
+  .err-ok { color: var(--ok); }
+  .err-warn { color: var(--warn); }
+  .err-bad { color: var(--bad); }
+  @media (max-width: 800px) {
+    .layout { grid-template-columns: 1fr; grid-template-rows: 55vh auto; overflow-y: auto; }
+    aside { border-left: 0; border-top: 1px solid var(--border); overflow: visible; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="status"><span id="status-dot" class="dot"></span><span id="status-text">Connecting…</span></div>
+  <div class="stat"><span class="label">Odom rate</span><span class="value" id="stat-rate">–</span></div>
+  <div class="stat"><span class="label">x</span><span class="value" id="stat-x">–</span></div>
+  <div class="stat"><span class="label">y</span><span class="value" id="stat-y">–</span></div>
+  <div class="stat"><span class="label">Yaw</span><span class="value" id="stat-yaw">–</span></div>
+  <div class="stat"><span class="label">v</span><span class="value" id="stat-v">–</span></div>
+  <div class="stat"><span class="label">ω</span><span class="value" id="stat-w">–</span></div>
+  <div class="controls">
+    <button id="btn-zoom-out" title="Zoom out">−</button>
+    <button id="btn-zoom-in" title="Zoom in">+</button>
+    <button id="btn-follow" aria-pressed="true" title="Keep the robot in the centre">Follow</button>
+    <button id="btn-clear" title="Clear the drawn path">Clear path</button>
+    <button id="btn-csv" title="Download all received samples as CSV">Export CSV</button>
+  </div>
+</header>
+
+<div class="layout">
+  <div class="map">
+    <canvas id="view"></canvas>
+    <div id="notice" hidden></div>
+  </div>
+
+  <aside>
+    <section>
+      <h2>Test move</h2>
+      <div class="form">
+        <label for="f-kind">Test</label>
+        <select id="f-kind">
+          <option value="drive">Drive straight</option>
+          <option value="rotate">Rotate in place</option>
+          <option value="wheels">Spin wheels</option>
+        </select>
+        <label for="f-pattern" id="l-pattern">Wheels</label>
+        <select id="f-pattern">
+          <option value="straight">Both forward (drives straight)</option>
+          <option value="spin">Opposite (spins in place)</option>
+        </select>
+        <label for="f-amount" id="l-amount">Distance (m)</label>
+        <input id="f-amount" type="number" step="any">
+        <label for="f-speed" id="l-speed">Speed (m/s)</label>
+        <input id="f-speed" type="number" step="any" min="0">
+        <label for="f-stop">Stop when</label>
+        <select id="f-stop">
+          <option value="odom">odometry reaches target</option>
+          <option value="time">time is up (open loop)</option>
+        </select>
+      </div>
+      <div class="buttons">
+        <button id="btn-run" class="primary">Run</button>
+        <button id="btn-stop" class="danger" title="Stop the robot (Esc)">STOP</button>
+      </div>
+      <div class="progress"><div id="progress-bar"></div></div>
+      <p id="move-status" class="hint"></p>
+      <p id="kind-hint" class="hint"></p>
+    </section>
+
+    <section>
+      <h2>Speed: measured vs commanded (last 20 s)</h2>
+      <canvas id="chart"></canvas>
+      <div class="legend"><span>odometry</span><span class="cmd">commanded</span></div>
+    </section>
+
+    <section>
+      <h2>Results</h2>
+      <table>
+        <thead><tr><th>#</th><th>Test</th><th>Target</th><th>Odom</th><th>Err</th><th>Real</th><th>Suggests</th></tr></thead>
+        <tbody id="results"></tbody>
+      </table>
+      <p class="hint">Measure what the robot really did (tape measure for distance, floor marks
+        for angle) and type it in <b>Real</b>. The page then suggests a corrected wheel_radius
+        (from straight runs) or wheel_separation (from turns) for your odometry driver.
+        Calibrate the radius first, then the separation.</p>
+    </section>
+  </aside>
+</div>
+
+<script>
+'use strict';
+
+// View radius limits in metres.
+const MIN_RADIUS_M = 0.25;
+const MAX_RADIUS_M = 20;
+// No snapshot from the server for this long (ms) means the connection is gone.
+const STALE_STREAM_MS = 2000;
+// No odometry for this long (s, reported by the server) means the topic stopped.
+const STALE_ODOM_S = 1.0;
+// A new path point is stored once the robot moved this far (m).
+const PATH_STEP_M = 0.01;
+const MAX_PATH_POINTS = 20000;
+// Samples kept for the CSV export (one hour at 20 Hz).
+const MAX_SAMPLES = 72000;
+const CHART_WINDOW_S = 20;
+
+// Form defaults per test kind: amount, speed, and the unit labels.
+const KINDS = {
+  drive:  { amount: 1.0, speed: 0.15, amountLabel: 'Distance (m)', speedLabel: 'Speed (m/s)',
+            hint: 'Drives forward (negative distance = backwards). Mark the start on the floor and measure the real distance.' },
+  rotate: { amount: 360, speed: 45, amountLabel: 'Angle (°)', speedLabel: 'Speed (°/s)',
+            hint: 'Turns in place, positive = left (counter-clockwise). A full 360° makes the real angle easy to judge.' },
+  wheels: { amount: 5, speed: 1.0, amountLabel: 'Wheel turns (rev)', speedLabel: 'Speed (rev/s)',
+            hint: 'Turns every wheel the given number of revolutions. Put a tape mark on a wheel and count real turns, or measure the distance.' },
+};
+
+const canvas = document.getElementById('view');
+const ctx = canvas.getContext('2d');
+const chart = document.getElementById('chart');
+const chartCtx = chart.getContext('2d');
+const css = getComputedStyle(document.documentElement);
+const color = name => css.getPropertyValue(name).trim();
+const $ = id => document.getElementById(id);
+const DEG = 180 / Math.PI;
+
+const state = {
+  data: null,           // last snapshot from /stream
+  lastMessageAt: 0,     // performance.now() of the last snapshot
+  connected: false,
+  viewRadius: 2,        // metres from view centre to the edge of the shorter canvas side
+  follow: true,
+  path: [],             // [{x, y}] in the odom frame, metres
+  history: [],          // chart samples {t (s), v, w, cv, cw}
+  samples: [],          // CSV rows
+  testStart: null,      // odom pose {x, y} where the current/last test started
+  results: [],          // finished tests (server result objects)
+  lastResultId: null,
+};
+
+/**
+ * Format an angle in radians as whole/one-decimal degrees.
+ *
+ * @param {number} rad  angle in radians.
+ * @return {string} e.g. "-12.3°".
+ */
+function fmtDeg(rad) {
+  return `${(rad * DEG).toFixed(1)}°`;
+}
+
+/**
+ * Pick a grid spacing that gives roughly 3-8 lines across the view radius.
+ *
+ * @param {number} radius  view radius in metres.
+ * @return {number} grid spacing in metres.
+ */
+function gridStep(radius) {
+  return [0.1, 0.25, 0.5, 1, 2, 5].find(step => radius / step <= 8) || 5;
+}
+
+/**
+ * Redraw the trajectory view: grid, odom axes, path, test start and robot.
+ * The odom frame is drawn with +x up and +y to the left, matching the
+ * LiDAR viewer's "forward is up" convention when yaw is 0.
+ */
+function drawMap() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.width / dpr;
+  const h = canvas.height / dpr;
+  const odom = state.data && state.data.odom;
+  const centre = state.follow && odom ? odom : { x: 0, y: 0 };
+  const scale = (Math.min(w, h) / 2) * 0.9 / state.viewRadius;  // pixels per metre
+  const toScreen = p => [w / 2 - (p.y - centre.y) * scale, h / 2 - (p.x - centre.x) * scale];
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = color('--bg');
+  ctx.fillRect(0, 0, w, h);
+
+  // Grid lines every `step` metres, labelled along the edges.
+  const step = gridStep(state.viewRadius);
+  const halfX = h / 2 / scale;  // metres visible along odom x (vertical)
+  const halfY = w / 2 / scale;  // metres visible along odom y (horizontal)
+  ctx.lineWidth = 1;
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.strokeStyle = color('--grid');
+  ctx.fillStyle = color('--grid-label');
+  for (let x = Math.ceil((centre.x - halfX) / step) * step; x <= centre.x + halfX; x += step) {
+    const [, sy] = toScreen({ x, y: centre.y });
+    ctx.beginPath(); ctx.moveTo(0, sy); ctx.lineTo(w, sy); ctx.stroke();
+    ctx.fillText(`x ${+x.toFixed(2)}`, 4, sy - 3);
+  }
+  for (let y = Math.ceil((centre.y - halfY) / step) * step; y <= centre.y + halfY; y += step) {
+    const [sx] = toScreen({ x: centre.x, y });
+    ctx.beginPath(); ctx.moveTo(sx, 0); ctx.lineTo(sx, h); ctx.stroke();
+    ctx.fillText(`y ${+y.toFixed(2)}`, sx + 3, h - 4);
+  }
+
+  // Odom origin axes: x (forward at start) and y (left at start).
+  const [ox, oy] = toScreen({ x: 0, y: 0 });
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = color('--axis-x');
+  ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox, oy - 0.3 * scale); ctx.stroke();
+  ctx.strokeStyle = color('--axis-y');
+  ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ox - 0.3 * scale, oy); ctx.stroke();
+
+  // Driven path.
+  if (state.path.length > 1) {
+    ctx.strokeStyle = color('--path');
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    state.path.forEach((p, i) => {
+      const [sx, sy] = toScreen(p);
+      if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
+    });
+    ctx.stroke();
+  }
+
+  if (state.testStart) {
+    const [sx, sy] = toScreen(state.testStart);
+    ctx.strokeStyle = color('--start');
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(sx, sy, 6, 0, 2 * Math.PI); ctx.stroke();
+  }
+
+  if (!odom) return;
+  // Robot triangle. Canvas rotation is clockwise-positive, odom yaw is
+  // counter-clockwise-positive, hence -yaw.
+  const [rx, ry] = toScreen(odom);
+  ctx.save();
+  ctx.translate(rx, ry);
+  ctx.rotate(-odom.yaw);
+  ctx.fillStyle = color('--robot');
+  ctx.beginPath();
+  ctx.moveTo(0, -12); ctx.lineTo(-8, 8); ctx.lineTo(8, 8);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+}
+
+/**
+ * Redraw the speed chart: linear speed (top) and angular speed (bottom),
+ * odometry as solid lines and commanded values as dashed lines.
+ */
+function drawChart() {
+  const dpr = window.devicePixelRatio || 1;
+  const w = chart.width / dpr;
+  const h = chart.height / dpr;
+  chartCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  chartCtx.fillStyle = color('--panel');
+  chartCtx.fillRect(0, 0, w, h);
+  const now = performance.now() / 1000;
+  const xOf = t => w - (now - t) / CHART_WINDOW_S * w;
+
+  const panels = [
+    { key: 'v', cmd: 'cv', label: 'v m/s', min: 0.1, top: 0 },
+    { key: 'w', cmd: 'cw', label: 'ω rad/s', min: 0.5, top: h / 2 },
+  ];
+  for (const p of panels) {
+    const ph = h / 2;
+    // Symmetric y range around zero, at least ±p.min.
+    const peak = state.history.reduce(
+      (m, s) => Math.max(m, Math.abs(s[p.key]), Math.abs(s[p.cmd])), p.min) * 1.15;
+    const yOf = v => p.top + ph / 2 - v / peak * (ph / 2 - 4);
+
+    chartCtx.strokeStyle = color('--grid');
+    chartCtx.lineWidth = 1;
+    chartCtx.beginPath(); chartCtx.moveTo(0, yOf(0)); chartCtx.lineTo(w, yOf(0)); chartCtx.stroke();
+    chartCtx.fillStyle = color('--grid-label');
+    chartCtx.font = '11px system-ui, sans-serif';
+    chartCtx.fillText(`${p.label}  ±${peak.toFixed(2)}`, 4, p.top + 12);
+
+    for (const [key, name, dash] of [[p.cmd, '--command', [5, 4]], [p.key, '--path', []]]) {
+      chartCtx.strokeStyle = color(name);
+      chartCtx.lineWidth = 1.5;
+      chartCtx.setLineDash(dash);
+      chartCtx.beginPath();
+      state.history.forEach((s, i) => {
+        if (i === 0) chartCtx.moveTo(xOf(s.t), yOf(s[key]));
+        else chartCtx.lineTo(xOf(s.t), yOf(s[key]));
+      });
+      chartCtx.stroke();
+    }
+    chartCtx.setLineDash([]);
+  }
+}
+
+/**
+ * Update the header stats, connection status, notice banner and move status.
+ */
+function updateStatus() {
+  const data = state.data;
+  const odom = data && data.odom;
+  const config = data && data.config;
+  const dot = $('status-dot');
+  const text = $('status-text');
+  const notice = $('notice');
+  const streamStale = performance.now() - state.lastMessageAt > STALE_STREAM_MS;
+  const odomStale = !odom || odom.age_s > STALE_ODOM_S;
+
+  notice.hidden = false;
+  if (!state.connected || streamStale) {
+    dot.className = 'dot';
+    text.textContent = 'Disconnected';
+    notice.textContent = 'Lost connection to the robot. Retrying…';
+  } else if (odomStale) {
+    dot.className = 'dot warn';
+    text.textContent = 'No odometry';
+    notice.textContent = `Connected, but no odometry is arriving on ${config.odom_topic}. ` +
+      'Is the motor/odometry driver running? (Launch with fake_odom:=true to try this page without one.)';
+  } else {
+    dot.className = 'dot ok';
+    text.textContent = config.fake_odom ? 'Live (FAKE odom)' : 'Live';
+    notice.hidden = true;
+  }
+
+  if (odom) {
+    $('stat-rate').textContent = `${odom.rate_hz.toFixed(1)} Hz`;
+    $('stat-x').textContent = `${odom.x.toFixed(3)} m`;
+    $('stat-y').textContent = `${odom.y.toFixed(3)} m`;
+    $('stat-yaw').textContent = fmtDeg(odom.yaw);
+    $('stat-v').textContent = `${odom.v.toFixed(3)} m/s`;
+    $('stat-w').textContent = `${(odom.w * DEG).toFixed(1)} °/s`;
+  }
+
+  const move = data && data.move;
+  const canMove = config && (config.allow_motion || config.fake_odom);
+  $('btn-run').disabled = !canMove || !!move || odomStale || !state.connected;
+  const status = $('move-status');
+  if (config && !canMove) {
+    status.className = 'hint error';
+    status.textContent = 'View only: motion is disabled. Relaunch with allow_motion:=true to run tests.';
+  } else if (move) {
+    status.className = 'hint';
+    status.textContent = move.phase === 'running'
+      ? `Running… ${move.elapsed.toFixed(1)} s of ~${move.duration.toFixed(1)} s`
+      : 'Stopped, waiting for the robot to settle…';
+  } else if (status.dataset.sticky !== 'true') {
+    status.className = 'hint';
+    status.textContent = config && !config.allow_motion
+      ? 'Fake odometry only: cmd_vel is not published, the real robot will not move.'
+      : '';
+  }
+  const progress = move ? Math.min(1, Math.max(0, move.progress)) : 0;
+  $('progress-bar').style.width = `${progress * 100}%`;
+}
+
+/**
+ * Describe the target and odometry result of a finished test in display units.
+ *
+ * @param {Object} r  result from the server (see summarize_move()).
+ * @return {Object} {test, target, odom} display strings.
+ */
+function describeResult(r) {
+  const isDistance = r.unit === 'm';
+  const fmt = v => isDistance ? `${v.toFixed(3)} m` : fmtDeg(v);
+  let test = { drive: 'Drive', rotate: 'Rotate', wheels: r.pattern === 'spin' ? 'Wheels ⟲' : 'Wheels ↑' }[r.kind];
+  if (r.stop_on === 'time') test += ' (timed)';
+  let target = fmt(r.commanded);
+  let odom = fmt(r.measured);
+  if (r.kind === 'wheels') {
+    target = `${r.amount} rev / ${target}`;
+    odom = `${r.measured_revs} rev / ${odom}`;
+  }
+  if (isDistance && Math.abs(r.lateral) >= 0.005) odom += `, drift ${r.lateral.toFixed(3)} m`;
+  return { test, target, odom };
+}
+
+/**
+ * Add one finished test to the results table, with an input for the real
+ * (hand-measured) value and a live correction suggestion.
+ *
+ * @param {Object} r  result from the server.
+ */
+function addResultRow(r) {
+  const config = state.data.config;
+  const d = describeResult(r);
+  const row = document.createElement('tr');
+  const cell = text => { const td = document.createElement('td'); td.textContent = text; row.appendChild(td); return td; };
+  cell(String(r.id));
+  cell(d.test).title = r.reason ? `Stopped early: ${r.reason}` : '';
+  cell(d.target);
+  cell(d.odom);
+  const err = cell(`${r.error_pct > 0 ? '+' : ''}${r.error_pct.toFixed(1)}%`);
+  err.className = Math.abs(r.error_pct) < 2 ? 'err-ok' : Math.abs(r.error_pct) < 10 ? 'err-warn' : 'err-bad';
+
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.step = 'any';
+  input.placeholder = r.unit === 'm' ? 'm' : '°';
+  cell('').appendChild(input);
+  const suggestion = cell('');
+
+  // Odometry distance scales with wheel_radius, so r_new = r * real / odom.
+  // Odometry rotation scales with 1 / wheel_separation, so L_new = L * odom / real.
+  input.oninput = () => {
+    const real = parseFloat(input.value);
+    if (!isFinite(real) || real === 0 || r.measured === 0) { suggestion.textContent = ''; return; }
+    if (r.unit === 'm') {
+      suggestion.textContent = `wheel_radius ≈ ${(config.wheel_radius * real / r.measured).toFixed(4)} m`;
+    } else {
+      const realRad = real / DEG;
+      suggestion.textContent = `wheel_separation ≈ ${(config.wheel_separation * r.measured / realRad).toFixed(4)} m`;
+    }
+  };
+  $('results').prepend(row);
+
+  if (r.reason) {
+    const status = $('move-status');
+    status.className = 'hint error';
+    status.textContent = `Test #${r.id} stopped early: ${r.reason}.`;
+    status.dataset.sticky = 'true';
+  }
+}
+
+/**
+ * Handle one snapshot from the server: store it, extend path, chart and
+ * CSV history, pick up finished tests and redraw.
+ *
+ * @param {Object} data  snapshot (see OdomTestServer._snapshot()).
+ */
+function onSnapshot(data) {
+  const wasMoving = state.data && state.data.move;
+  state.data = data;
+  state.lastMessageAt = performance.now();
+  const odom = data.odom;
+
+  if (odom) {
+    const last = state.path[state.path.length - 1];
+    if (!last || Math.hypot(odom.x - last.x, odom.y - last.y) >= PATH_STEP_M) {
+      state.path.push({ x: odom.x, y: odom.y });
+      if (state.path.length > MAX_PATH_POINTS) state.path.shift();
+    }
+    if (data.move && !wasMoving) state.testStart = { x: odom.x, y: odom.y };
+
+    const t = performance.now() / 1000;
+    state.history.push({ t, v: odom.v, w: odom.w, cv: data.cmd.v, cw: data.cmd.w });
+    while (state.history.length && t - state.history[0].t > CHART_WINDOW_S) state.history.shift();
+
+    state.samples.push([data.t, odom.x, odom.y, odom.yaw, odom.v, odom.w,
+      data.cmd.v, data.cmd.w, data.move ? data.move.kind : '']);
+    if (state.samples.length > MAX_SAMPLES) state.samples.shift();
+  }
+
+  if (data.result && data.result.id !== state.lastResultId) {
+    state.lastResultId = data.result.id;
+    state.results.push(data.result);
+    addResultRow(data.result);
+  }
+
+  updateStatus();
+  drawMap();
+  drawChart();
+}
+
+/**
+ * Send a POST command to the server.
+ *
+ * @param {string} path  'move' or 'stop' (relative, so it works behind an SSH tunnel).
+ * @param {Object} body  JSON body.
+ * @return {Promise<Object>} parsed reply {ok, error}; network failures are
+ *   returned as {ok: false, error}.
+ */
+async function post(path, body) {
+  try {
+    const reply = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return await reply.json();
+  } catch (e) {
+    return { ok: false, error: `Request failed: ${e.message}` };
+  }
+}
+
+/**
+ * Read the form and ask the server to start a test move.
+ */
+async function runTest() {
+  const status = $('move-status');
+  status.dataset.sticky = 'false';
+  const reply = await post('move', {
+    kind: $('f-kind').value,
+    pattern: $('f-pattern').value,
+    amount: parseFloat($('f-amount').value),
+    speed: parseFloat($('f-speed').value),
+    stop_on: $('f-stop').value,
+  });
+  if (!reply.ok) {
+    status.className = 'hint error';
+    status.textContent = reply.error;
+    status.dataset.sticky = 'true';
+  }
+}
+
+/**
+ * Show the form fields, labels, defaults and hint for the selected test kind.
+ */
+function onKindChange() {
+  const kind = KINDS[$('f-kind').value];
+  const isWheels = $('f-kind').value === 'wheels';
+  $('l-pattern').hidden = !isWheels;
+  $('f-pattern').hidden = !isWheels;
+  $('l-amount').textContent = kind.amountLabel;
+  $('l-speed').textContent = kind.speedLabel;
+  $('f-amount').value = kind.amount;
+  $('f-speed').value = kind.speed;
+  $('kind-hint').textContent = kind.hint;
+}
+
+/**
+ * Download every stored sample as a CSV file.
+ */
+function exportCsv() {
+  const header = 'unix_time_s,x_m,y_m,yaw_rad,v_mps,w_radps,cmd_v_mps,cmd_w_radps,test\n';
+  const body = state.samples.map(row => row.join(',')).join('\n');
+  const url = URL.createObjectURL(new Blob([header + body], { type: 'text/csv' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `odom_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Match both canvases' pixel buffers to their on-screen size (sharp on HiDPI).
+ */
+function resizeCanvases() {
+  const dpr = window.devicePixelRatio || 1;
+  for (const c of [canvas, chart]) {
+    const rect = c.getBoundingClientRect();
+    c.width = Math.round(rect.width * dpr);
+    c.height = Math.round(rect.height * dpr);
+  }
+  drawMap();
+  drawChart();
+}
+
+/**
+ * Change the view radius and redraw.
+ *
+ * @param {number} factor  multiplier for the radius; > 1 zooms out, < 1 zooms in.
+ */
+function zoom(factor) {
+  state.viewRadius = Math.min(MAX_RADIUS_M, Math.max(MIN_RADIUS_M, state.viewRadius * factor));
+  drawMap();
+}
+
+/**
+ * Wire up buttons, form, keyboard (Esc = STOP), wheel zoom and pinch zoom.
+ */
+function setupControls() {
+  $('btn-zoom-in').onclick = () => zoom(1 / 1.25);
+  $('btn-zoom-out').onclick = () => zoom(1.25);
+  $('btn-follow').onclick = () => {
+    state.follow = !state.follow;
+    $('btn-follow').setAttribute('aria-pressed', String(state.follow));
+    drawMap();
+  };
+  $('btn-clear').onclick = () => {
+    const odom = state.data && state.data.odom;
+    state.path = odom ? [{ x: odom.x, y: odom.y }] : [];
+    state.testStart = null;
+    drawMap();
+  };
+  $('btn-csv').onclick = exportCsv;
+  $('btn-run').onclick = runTest;
+  $('btn-stop').onclick = () => post('stop', {});
+  $('f-kind').onchange = onKindChange;
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') post('stop', {});
+  });
+
+  canvas.addEventListener('wheel', event => {
+    event.preventDefault();
+    zoom(Math.exp(event.deltaY * 0.001));
+  }, { passive: false });
+  let pinchDistance = null;
+  const touchDistance = t => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY);
+  canvas.addEventListener('touchstart', event => {
+    if (event.touches.length === 2) pinchDistance = touchDistance(event.touches);
+  });
+  canvas.addEventListener('touchmove', event => {
+    if (event.touches.length !== 2 || !pinchDistance) return;
+    event.preventDefault();
+    const distance = touchDistance(event.touches);
+    zoom(pinchDistance / distance);
+    pinchDistance = distance;
+  }, { passive: false });
+  canvas.addEventListener('touchend', () => { pinchDistance = null; });
+}
+
+/**
+ * Open the SSE stream. The browser reconnects automatically if it drops.
+ */
+function connect() {
+  const source = new EventSource('stream');
+  source.onopen = () => { state.connected = true; updateStatus(); };
+  source.onerror = () => { state.connected = false; updateStatus(); };
+  source.onmessage = event => {
+    state.connected = true;
+    onSnapshot(JSON.parse(event.data));
+  };
+}
+
+window.addEventListener('resize', resizeCanvases);
+setupControls();
+onKindChange();
+resizeCanvases();
+connect();
+setInterval(updateStatus, 500);  // notices a dead connection even when no events arrive
+</script>
+</body>
+</html>
