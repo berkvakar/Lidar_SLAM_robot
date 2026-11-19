@@ -20,16 +20,19 @@ from launch.substitutions import LaunchConfiguration
 def generate_launch_description():
     """Build the launch description for SLAM.
 
-    Declares the use_sim_time argument and includes slam_toolbox's
-    online_async_launch.py, pointing it at this package's installed
-    parameter file.
+    Declares the launch arguments and includes slam_toolbox's
+    online_async_launch.py with the chosen parameter file.
 
     Launch arguments:
         use_sim_time (str): 'true' to use the /clock topic (simulation or
             bag playback), 'false' for the real robot. Default 'false'.
+        slam_params_file (str): absolute path to a slam_toolbox YAML.
+            Default: this package's installed
+            config/mapper_params_online_async.yaml. Lets you try tuned
+            parameters without rebuilding.
 
     Returns:
-        LaunchDescription: the argument declaration plus the included
+        LaunchDescription: the argument declarations plus the included
             slam_toolbox launch file.
 
     Raises:
@@ -37,8 +40,9 @@ def generate_launch_description():
             installed or the workspace is not sourced.
     """
     use_sim_time = LaunchConfiguration('use_sim_time')
+    slam_params_file = LaunchConfiguration('slam_params_file')
 
-    slam_params_file = os.path.join(
+    default_params_file = os.path.join(
         get_package_share_directory('my_robot_slam'),
         'config', 'mapper_params_online_async.yaml')
     slam_toolbox_launch = os.path.join(
@@ -50,6 +54,10 @@ def generate_launch_description():
             'use_sim_time',
             default_value='false',
             description='Use simulation (/clock) time if true'),
+        DeclareLaunchArgument(
+            'slam_params_file',
+            default_value=default_params_file,
+            description='Full path to the slam_toolbox parameter file'),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(slam_toolbox_launch),
             launch_arguments={
