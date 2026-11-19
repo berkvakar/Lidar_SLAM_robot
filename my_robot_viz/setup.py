@@ -20,7 +20,7 @@ setup(
     zip_safe=True,
     maintainer='berkvakar',
     maintainer_email='berkvakar1@gmail.com',
-    description='Live LiDAR scan viewer: streams /scan to a web page served from the robot',
+    description='Browser test tools served from the robot: live LiDAR (/scan) viewer and odometry (/odom) test bench',
     license='Apache-2.0',
     entry_points={
         'console_scripts': [

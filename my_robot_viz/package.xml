@@ -3,7 +3,7 @@
 <package format="3">
   <name>my_robot_viz</name>
   <version>0.1.0</version>
-  <description>Live LiDAR scan viewer: streams /scan to a web page served from the robot</description>
+  <description>Browser test tools served from the robot: live LiDAR (/scan) viewer and odometry (/odom) test bench</description>
   <maintainer email="berkvakar1@gmail.com">berkvakar</maintainer>
   <license>Apache-2.0</license>
 
