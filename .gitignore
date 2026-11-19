@@ -1,0 +1,13 @@
+# colcon build output (when the repo is used as a workspace root)
+build/
+install/
+log/
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Editor / local tool settings
+.vscode/
+.claude/settings.local.json
