@@ -43,6 +43,30 @@ SLAM waits for a `/scan` topic (LiDAR driver) and an `odom -> base_footprint` TF
 (odometry). Neither exists yet; both come in later phases, so for now the SLAM
 node starts but produces no map.
 
+To try different SLAM parameters without rebuilding, point the launch file at
+another YAML (copy `config/mapper_params_online_async.yaml` as a starting point):
+
+```bash
+ros2 launch my_robot_slam slam.launch.py slam_params_file:=$HOME/my_params.yaml
+```
+
+### Saving a map
+
+While mapping runs, save the current map from a second terminal. Run it from
+`my_robot_slam/maps/` so the files land in the repo's maps folder:
+
+```bash
+cd ~/ros2_ws/src/<this-repo>/my_robot_slam/maps
+# Serialized pose graph (.posegraph + .data): lets slam_toolbox continue or localize later
+ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: '$PWD/my_map'}"
+# Occupancy grid image (.pgm + .yaml) for Nav2
+ros2 service call /slam_toolbox/save_map slam_toolbox/srv/SaveMap "{name: {data: '$PWD/my_map'}}"
+```
+
+To continue or localize against a saved map, set `map_file_name` (without
+extension) and `mode` in the params file, then rebuild or pass it with
+`slam_params_file:=`.
+
 ## LiDAR viewer
 
 `my_robot_viz` shows the live `/scan` in a web browser. The Pi serves the page,
